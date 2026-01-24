@@ -1,24 +1,29 @@
-import { ipcRenderer, contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 
-// --------- Expose some API to the Renderer process ---------
-contextBridge.exposeInMainWorld('ipcRenderer', {
-  on(...args: Parameters<typeof ipcRenderer.on>) {
-    const [channel, listener] = args
-    return ipcRenderer.on(channel, (event, ...args) => listener(event, ...args))
-  },
-  off(...args: Parameters<typeof ipcRenderer.off>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.off(channel, ...omit)
-  },
-  send(...args: Parameters<typeof ipcRenderer.send>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.send(channel, ...omit)
-  },
-  invoke(...args: Parameters<typeof ipcRenderer.invoke>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.invoke(channel, ...omit)
-  },
+interface Config {
+  [key: string]: unknown
+}
 
-  // You can expose other APTs you need here.
-  // ...
-})
+interface State {
+  [key: string]: unknown
+}
+
+interface ElectronAPI {
+  getConfig: () => Promise<Config>
+  getState: () => Promise<State>
+  saveConfig: (cfg: Config) => Promise<void>
+  start: () => Promise<void>
+  stop: () => Promise<void>
+  testSitrad: (cfg: Config) => Promise<unknown>
+}
+
+const api: ElectronAPI = {
+  getConfig: () => ipcRenderer.invoke('get-config'),
+  getState: () => ipcRenderer.invoke('get-state'),
+  saveConfig: (cfg) => ipcRenderer.invoke('save-config', cfg),
+  start: () => ipcRenderer.invoke('start'),
+  stop: () => ipcRenderer.invoke('stop'),
+  testSitrad: (cfg) => ipcRenderer.invoke('test-sitrad-api', cfg),
+}
+
+contextBridge.exposeInMainWorld('electronAPI', api)

@@ -1,145 +1,123 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CheckCircle, Loader2, Save, Settings, XCircle } from 'lucide-react'
+import { CheckCircle, Loader2, PlayCircle, Settings, Square, WifiOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import * as z from 'zod'
 
 const configSchema = z.object({
-  sitradUrl: z.url({ message: "URL inválida" }),
-  username: z.string().min(1, { message: "Usuário é obrigatório" }),
-  password: z.string().min(1, { message: "Senha é obrigatória" }),
-  organizationId: z.string().min(1, { message: "Organization ID é obrigatório" }),
+  sitradUrl: z.url("URL inválida"),
+  username: z.string().min(1, "Usuário obrigatório"),
+  password: z.string().min(1, "Senha obrigatória"),
+  organizationId: z.uuid("Formato Inválido").min(1, "Organization ID obrigatório"),
 })
 
 type ConfigData = z.infer<typeof configSchema>
+type Status = 'running' | 'stopped' | 'testing' | 'idle' | 'error'
 
-function App() {
-  const [status, setStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
-  const [message, setMessage] = useState('')
-  const [isSaved, setIsSaved] = useState(false)
-
-  const { register, handleSubmit, formState: { errors }, setValue } = useForm<ConfigData>({
+export default function App() {
+  const { register, handleSubmit, setValue, formState: { errors } } = useForm<ConfigData>({
     resolver: zodResolver(configSchema)
   })
 
-  useEffect(() => {
-    window.ipcRenderer.invoke('get-config').then((config) => {
-      if (config) {
-        setValue('sitradUrl', config.sitradUrl)
-        setValue('username', config.username)
-        setValue('password', config.password)
-        setValue('organizationId', config.organizationId)
-      }
-    })
-  }, [setValue])
+  const [status, setStatus] = useState<Status>('idle')
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState('')
 
-  const testConnection = async (data: ConfigData) => {
-    setStatus('testing')
-    setMessage('Testando conexão...')
-    try {
-      const result = await window.ipcRenderer.invoke('test-sitrad-api', data)
-      if (result.success) {
-        setStatus('success')
-        setMessage('Conexão estabelecida com sucesso!')
-      } else {
-        setStatus('error')
-        setMessage(`Falha na conexão: ${result.error}`)
-      }
-    } catch (err) {
-      setStatus('error')
-      setMessage('Erro ao tentar conectar.')
+  async function loadInitialState() {
+    const config = await window.electronAPI.getConfig()
+    const running = await window.electronAPI.getState()
+
+    if (config) {
+      setValue('sitradUrl', config.sitradUrl)
+      setValue('username', config.username)
+      setValue('password', config.password)
+      setValue('organizationId', config.organizationId)
     }
+
+    setStatus(running ? 'running' : 'stopped')
   }
 
-  const saveConfig = async (data: ConfigData) => {
+  useEffect(() => {
+    loadInitialState()
+  }, [])
+
+  const testAPI = handleSubmit(async (data) => {
+    setLoading(true)
+    setStatus('testing')
+    setMessage('Testando conexão com o Sitrad...')
+
     try {
-      await window.ipcRenderer.invoke('save-config', data)
-      setIsSaved(true)
-      setTimeout(() => setIsSaved(false), 3000)
-    } catch (err) {
-      alert('Erro ao salvar configuração')
+      const result = await window.electronAPI.testSitrad(data)
+      if (result.success) {
+        setMessage('Conexão OK!')
+        setStatus('idle')
+      } else {
+        setMessage('Erro: ' + result.error)
+        setStatus('error')
+      }
+    } finally {
+      setLoading(false)
     }
+  })
+
+  const start = handleSubmit(async (data) => {
+    await window.electronAPI.saveConfig(data)
+    await window.electronAPI.start()
+    setStatus('running')
+    setMessage('Enviando dados...')
+  })
+
+  const stop = async () => {
+    await window.electronAPI.stop()
+    setStatus('stopped')
+    setMessage('Envio interrompido.')
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-8">
-      <div className="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden md:max-w-2xl p-6">
-        <div className="flex items-center mb-6">
-          <Settings className="text-blue-600 mr-2" size={24} />
-          <h1 className="text-2xl font-bold text-gray-800">Cold Monitor Collector</h1>
+    <div className="min-h-screen bg-slate-100 p-8 flex justify-center items-start">
+      <div className="w-full max-w-lg bg-white shadow-xl rounded-xl p-6 border border-slate-200">
+        <div className="flex items-center gap-2 mb-6">
+          <Settings className="text-blue-600" size={24} />
+          <h1 className="text-xl font-semibold text-slate-800">Cold Monitor Coletor</h1>
         </div>
 
-        <form onSubmit={handleSubmit(testConnection)} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">URL da API Sitrad</label>
-            <input
-              {...register('sitradUrl')}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
-              placeholder="http://192.168.1.100:8080/api/v1"
-            />
-            {errors.sitradUrl && <p className="text-red-500 text-xs mt-1">{errors.sitradUrl.message}</p>}
-          </div>
+        <div className="space-y-4">
+          <Input label="URL da API Sitrad" reg={register('sitradUrl')} error={errors.sitradUrl?.message} placeholder="http://192.168.0.100:8080/api/v1" />
+          <Input label="Usuário" reg={register('username')} error={errors.username?.message} />
+          <Input type="password" label="Senha" reg={register('password')} error={errors.password?.message} />
+          <Input label="Organization ID" reg={register('organizationId')} error={errors.organizationId?.message} />
+        </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Usuário</label>
-            <input
-              {...register('username')}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
-            />
-            {errors.username && <p className="text-red-500 text-xs mt-1">{errors.username.message}</p>}
-          </div>
+        <div className="mt-5 space-y-3">
+          <button onClick={testAPI} disabled={loading}
+            className="w-full bg-blue-600 text-white py-2 rounded-lg flex justify-center items-center gap-2 hover:bg-blue-700 transition">
+            {loading && <Loader2 className="animate-spin" size={18} />}
+            Testar API
+          </button>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Senha</label>
-            <input
-              type="password"
-              {...register('password')}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
-            />
-            {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password.message}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Organization ID</label>
-            <input
-              {...register('organizationId')}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
-            />
-            {errors.organizationId && <p className="text-red-500 text-xs mt-1">{errors.organizationId.message}</p>}
-          </div>
-
-          <div className="flex space-x-4 pt-4">
-            <button
-              type="submit"
-              disabled={status === 'testing'}
-              className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 flex justify-center items-center"
-            >
-              {status === 'testing' ? <Loader2 className="animate-spin mr-2" size={18} /> : null}
-              Testar API
+          {status !== 'running' ? (
+            <button onClick={start} className="w-full bg-green-600 text-white py-2 rounded-lg flex justify-center items-center gap-2 hover:bg-green-700">
+              <PlayCircle size={18} /> Iniciar Envio
             </button>
-
-            <button
-              type="button"
-              onClick={handleSubmit(saveConfig)}
-              disabled={status !== 'success'}
-              className={`flex-1 py-2 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 flex justify-center items-center ${status === 'success'
-                ? 'bg-green-600 text-white hover:bg-green-700 focus:ring-green-500'
-                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
-            >
-              <Save className="mr-2" size={18} />
-              {isSaved ? 'Salvo!' : 'Salvar e Iniciar'}
+          ) : (
+            <button onClick={stop} className="w-full bg-red-600 text-white py-2 rounded-lg flex justify-center items-center gap-2 hover:bg-red-700">
+              <Square size={18} /> Parar Envio
             </button>
-          </div>
-        </form>
+          )}
+        </div>
 
         {message && (
-          <div className={`mt-4 p-3 rounded-md flex items-center ${status === 'success' ? 'bg-green-100 text-green-800' :
-            status === 'error' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
-            }`}>
-            {status === 'success' && <CheckCircle className="mr-2" size={18} />}
-            {status === 'error' && <XCircle className="mr-2" size={18} />}
-            <span className="text-sm font-medium">{message}</span>
+          <div className={`
+            mt-4 text-sm px-3 py-2 rounded-lg flex items-center gap-2 border
+            ${status === 'running' ? 'bg-green-100 border-green-300 text-green-800' :
+              status === 'error' ? 'bg-red-100 border-red-300 text-red-800' :
+                status === 'testing' ? 'bg-blue-100 border-blue-300 text-blue-800' :
+                  'bg-gray-100 border-gray-300 text-gray-700'}
+          `}>
+            {status === 'running' && <CheckCircle size={18} className="text-green-700" />}
+            {status === 'error' && <WifiOff size={18} className="text-red-700" />}
+            {status === 'testing' && <Loader2 size={18} className="animate-spin text-blue-700" />}
+            <span>{message}</span>
           </div>
         )}
       </div>
@@ -147,4 +125,13 @@ function App() {
   )
 }
 
-export default App
+function Input({ label, error, type = "text", reg, placeholder }: any) {
+  return (
+    <div>
+      <label className="block text-sm text-slate-700 font-medium mb-1">{label}</label>
+      <input {...reg} type={type} placeholder={placeholder}
+        className="w-full border rounded-lg px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+    </div>
+  )
+}
