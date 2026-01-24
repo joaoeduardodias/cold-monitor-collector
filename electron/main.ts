@@ -77,8 +77,20 @@ function setTray(running: boolean) {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 700,
-    height: 650,
+    width: 600,
+    height: 800,
+    frame: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      height: 24,
+      color: '#f5f5f5',
+      symbolColor: '#1a1a1a',
+    },
+    trafficLightPosition: { x: 15, y: 15 },
+    vibrancy: 'sidebar',
+    visualEffectState: 'active',
+    backgroundColor: '#00000000', // transparente
+    roundedCorners: true,
     webPreferences: {
       preload: path.join(MAIN_DIST, 'preload.mjs'),
     }

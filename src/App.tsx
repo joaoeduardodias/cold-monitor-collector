@@ -75,6 +75,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 p-8 flex justify-center items-start">
+
+
       <div className="w-full max-w-lg bg-white shadow-xl rounded-xl p-6 border border-slate-200">
         <div className="flex items-center gap-2 mb-6">
           <Settings className="text-blue-600" size={24} />
