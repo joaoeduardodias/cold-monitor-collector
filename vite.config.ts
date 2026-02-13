@@ -16,14 +16,4 @@ export default defineConfig({
       renderer: {},
     }),
   ],
-  build: {
-    rollupOptions: {
-      external: ['bufferutil', 'utf-8-validate'],
-      input: {
-        preload: path.join(__dirname, 'src/preload.mjs'),
-        main: path.join(__dirname, 'src/main.ts'),
-      }
-    },
-
-  }
 })

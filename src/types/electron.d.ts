@@ -5,6 +5,9 @@ export interface ElectronAPI {
   start(): Promise<void>
   stop(): Promise<void>
   testSitrad(cfg: any): Promise<{ success: boolean; error?: string }>
+  minimizeWindow(): Promise<void>
+  toggleMaximizeWindow(): Promise<void>
+  closeWindow(): Promise<void>
 }
 
 declare global {

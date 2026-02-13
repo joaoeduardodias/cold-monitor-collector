@@ -6,12 +6,11 @@ import https from 'https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
-
-
-// para rodar como serviço tem q descomentar 
-// const silentWrite: typeof process.stdout.write = () => true
-// process.stdout.write = silentWrite
-// process.stderr.write = silentWrite
+import { getInstruments, getInstrumentsWithValues } from './functions-instrument'
+import { NormalizedReading } from './types'
+import { createSlug } from './utils/create-slug'
+import { testWebSocketConnection } from './utils/test-websocket-connection'
+import { toNormalizedReading } from './utils/to-normalized-reading'
 
 process.on('uncaughtException', (err) => {
   log?.error?.('uncaughtException:', err)
@@ -47,12 +46,6 @@ let reconnectTimeout: NodeJS.Timeout | null = null
 const agent = new https.Agent({ rejectUnauthorized: false })
 let instrumentMapping: Record<string, string> = {}
 
-function slugify(name: string) {
-  return name.toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
 
 function setTray(running: boolean) {
   tray?.setContextMenu(Menu.buildFromTemplate([
@@ -65,7 +58,7 @@ function setTray(running: boolean) {
     },
     {
       label: running ? 'Parar envio' : 'Iniciar envio',
-      click: () => running ? stopCollector() : startCollector()
+      click: () => running ? stopCollector() : startAppCollector()
     },
     { type: 'separator' },
     {
@@ -78,18 +71,13 @@ function setTray(running: boolean) {
 function createWindow() {
   win = new BrowserWindow({
     width: 600,
-    height: 800,
-    frame: true,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      height: 24,
-      color: '#f5f5f5',
-      symbolColor: '#1a1a1a',
-    },
-    trafficLightPosition: { x: 15, y: 15 },
-    vibrancy: 'sidebar',
-    visualEffectState: 'active',
-    backgroundColor: '#00000000', // transparente
+    height: 700,
+    center: true,
+    minWidth: 520,
+    minHeight: 560,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
     roundedCorners: true,
     webPreferences: {
       preload: path.join(MAIN_DIST, 'preload.mjs'),
@@ -99,35 +87,22 @@ function createWindow() {
   if (VITE_DEV) win.loadURL(VITE_DEV)
   else win.loadFile(path.join(RENDERER_DIST, 'index.html'))
 
+  win.once('ready-to-show', () => {
+    win?.center()
+  })
+
   win.on('close', (e) => {
     e.preventDefault()
     win!.hide()
   })
 }
 
-async function getInstruments(config: any) {
-  const base = config.sitradUrl.replace(/\/+$/, '')
-  const r = await axios.get(`${base}/instruments`, {
-    auth: { username: config.username, password: config.password },
-    httpsAgent: agent
-  })
-  return r.data.results || []
-}
-
-async function getValues(id: number, config: any) {
-  const base = config.sitradUrl.replace(/\/+$/, '')
-  const r = await axios.get(`${base}/instruments/${id}/values`, {
-    auth: { username: config.username, password: config.password },
-    httpsAgent: agent
-  })
-
-
-  return r.data.results || []
-}
 
 const WS_URL = "ws://localhost:3333/ws/agent"
 
-function startCollector() {
+
+
+function startAppCollector() {
   const config = store.get('config')
   if (!config) return
 
@@ -147,14 +122,17 @@ function startCollector() {
     const list = await getInstruments(config)
 
     for (const inst of list) {
+      const name = inst.name || 'instrument missing name'
+      const model = typeof inst.modelId === 'number' ? inst.modelId : 72
+
       socket!.send(JSON.stringify({
         type: 'INSTRUMENT_CREATE',
         payload: {
           idSitrad: inst.id,
-          name: inst.name,
-          slug: slugify(inst.name),
-          model: inst.modelId,
-          type: inst.modelId === 67 ? 'PRESSURE' : 'TEMPERATURE',
+          name,
+          slug: createSlug(name),
+          model,
+          type: model === 67 ? 'PRESSURE' : 'TEMPERATURE',
           organizationId: config.organizationId
         }
       }))
@@ -172,30 +150,24 @@ function startCollector() {
   socket.on('error', () => scheduleReconnect())
 
   interval = setInterval(async () => {
-    const list = await getInstruments(config)
-    const readings: { instrumentId: string; data: any[] }[] = []
+    const list = await getInstrumentsWithValues(config)
+    const readings: NormalizedReading[] = []
 
     for (const inst of list) {
-      const slug = slugify(inst.name)
+      const name = inst.name || 'instrument missing name'
+      const slug = createSlug(name)
       const instrumentId = instrumentMapping[slug]
       if (!instrumentId) continue
 
-      let sensors
-      try {
-        sensors = await getValues(inst.id, config)
-      } catch (err) {
-        log.error('Erro ao obter valores do Sitrad:', err instanceof Error ? err.message : String(err))
-        continue
+      if (inst.error) {
+        log.error(`Instrumento com erro no Sitrad (${name} / ${inst.id}): ${inst.error}`)
       }
 
-      readings.push({
-        instrumentId,
-        data: sensors
-      })
+      readings.push(toNormalizedReading(inst, instrumentId))
     }
 
     if (readings.length && socket?.readyState === 1) {
-      log.info("Enviando")
+      log.info(readings);
       socket.send(JSON.stringify({
         type: 'TEMPERATURE_READING',
         payload: { readings }
@@ -210,7 +182,7 @@ function scheduleReconnect() {
   reconnectTimeout = setTimeout(() => {
     reconnectTimeout = null
     const running = store.get('isRunning')
-    if (running) startCollector()
+    if (running) startAppCollector()
   }, 3000)
 }
 
@@ -225,23 +197,48 @@ function stopCollector() {
 ipcMain.handle('get-config', () => store.get('config'))
 ipcMain.handle('get-state', () => store.get('isRunning'))
 ipcMain.handle('save-config', (_e, cfg) => store.set('config', cfg))
-ipcMain.handle('start', () => startCollector())
+ipcMain.handle('start', () => startAppCollector())
 ipcMain.handle('stop', () => stopCollector())
+ipcMain.handle('window-minimize', (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.minimize()
+})
+ipcMain.handle('window-toggle-maximize', (event) => {
+  const target = BrowserWindow.fromWebContents(event.sender)
+  if (!target) return
+  if (target.isMaximized()) target.unmaximize()
+  else target.maximize()
+})
+ipcMain.handle('window-close', (event) => {
+  const target = BrowserWindow.fromWebContents(event.sender)
+  if (!target) return
+  target.removeAllListeners('close')
+  target.close()
+})
 
 ipcMain.handle('test-sitrad-api', async (_e, config) => {
   try {
     const base = config.sitradUrl.replace(/\/+$/, '')
     const r = await axios.get(`${base}/instruments`, {
       auth: { username: config.username, password: config.password },
-      httpsAgent: agent
+      httpsAgent: agent,
+      timeout: 8000,
+      validateStatus: () => true,
+      headers: {
+        Accept: 'application/json'
+      }
     })
 
-    return { success: true, data: r.data }
+    if (r.status !== 200) {
+      return { success: false, error: 'Erro na API' }
+    }
+
+    await testWebSocketConnection(WS_URL)
+
+    return { success: true }
   } catch (err: any) {
     return { success: false, error: err.message }
   }
 })
-
 
 
 app.setLoginItemSettings({
@@ -263,7 +260,7 @@ app.whenReady().then(() => {
   const config = store.get('config')
   const running = !!store.get('isRunning')
 
-  if (running && config) startCollector()
+  if (running && config) startAppCollector()
 
   setTray(running)
 })

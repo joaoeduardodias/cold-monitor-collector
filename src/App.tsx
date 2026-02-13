@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CheckCircle, Loader2, PlayCircle, Settings, Square, WifiOff } from 'lucide-react'
+import { CheckCircle, Loader2, Minus, PlayCircle, Settings, Square, WifiOff, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import * as z from 'zod'
@@ -13,6 +13,14 @@ const configSchema = z.object({
 
 type ConfigData = z.infer<typeof configSchema>
 type Status = 'running' | 'stopped' | 'testing' | 'idle' | 'error'
+
+function getStatusLabel(status: Status) {
+  if (status === 'running') return 'Ativo'
+  if (status === 'testing') return 'Testando'
+  if (status === 'error') return 'Erro'
+  if (status === 'stopped') return 'Parado'
+  return 'Pronto'
+}
 
 export default function App() {
   const { register, handleSubmit, setValue, formState: { errors } } = useForm<ConfigData>({
@@ -73,55 +81,82 @@ export default function App() {
     setMessage('Envio interrompido.')
   }
 
+  const minimizeWindow = async () => {
+    await window.electronAPI.minimizeWindow()
+  }
+
+  const toggleMaximizeWindow = async () => {
+    await window.electronAPI.toggleMaximizeWindow()
+  }
+
+  const closeWindow = async () => {
+    await window.electronAPI.closeWindow()
+  }
+
   return (
-    <div className="min-h-screen bg-slate-100 p-8 flex justify-center items-start">
-
-
-      <div className="w-full max-w-lg bg-white shadow-xl rounded-xl p-6 border border-slate-200">
-        <div className="flex items-center gap-2 mb-6">
-          <Settings className="text-blue-600" size={24} />
-          <h1 className="text-xl font-semibold text-slate-800">Cold Monitor Coletor</h1>
-        </div>
-
-        <div className="space-y-4">
-          <Input label="URL da API Sitrad" reg={register('sitradUrl')} error={errors.sitradUrl?.message} placeholder="http://192.168.0.100:8080/api/v1" />
-          <Input label="Usuário" reg={register('username')} error={errors.username?.message} />
-          <Input type="password" label="Senha" reg={register('password')} error={errors.password?.message} />
-          <Input label="Organization ID" reg={register('organizationId')} error={errors.organizationId?.message} />
-        </div>
-
-        <div className="mt-5 space-y-3">
-          <button onClick={testAPI} disabled={loading}
-            className="w-full bg-blue-600 text-white py-2 rounded-lg flex justify-center items-center gap-2 hover:bg-blue-700 transition">
-            {loading && <Loader2 className="animate-spin" size={18} />}
-            Testar API
-          </button>
-
-          {status !== 'running' ? (
-            <button onClick={start} className="w-full bg-green-600 text-white py-2 rounded-lg flex justify-center items-center gap-2 hover:bg-green-700">
-              <PlayCircle size={18} /> Iniciar Envio
+    <div className="app-backdrop">
+      <div className="window-shell">
+        <div className="window-drag-bar">
+          <div className="window-drag-left">
+            <span className="window-drag-title">Cold Monitor Collector</span>
+            <span className={`status-pill status-${status}`}>{getStatusLabel(status)}</span>
+          </div>
+          <div className="window-controls">
+            <button type="button" className="window-control-btn" onClick={minimizeWindow} aria-label="Minimizar janela">
+              <Minus size={16} />
             </button>
-          ) : (
-            <button onClick={stop} className="w-full bg-red-600 text-white py-2 rounded-lg flex justify-center items-center gap-2 hover:bg-red-700">
-              <Square size={18} /> Parar Envio
+            <button type="button" className="window-control-btn" onClick={toggleMaximizeWindow} aria-label="Maximizar ou restaurar janela">
+              <Square size={14} />
             </button>
+            <button type="button" className="window-control-btn window-control-close" onClick={closeWindow} aria-label="Fechar janela">
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="app-content">
+          <header className="app-header">
+            <div className="app-header-title">
+              <Settings className="app-icon" size={24} />
+              <h1>Cold Monitor Coletor</h1>
+            </div>
+            <p>Configure credenciais, valide conexão e inicie a coleta de dados.</p>
+          </header>
+
+          <section className="panel">
+            <div className="field-grid">
+              <Input label="URL da API Sitrad" reg={register('sitradUrl')} error={errors.sitradUrl?.message} placeholder="https://192.168.0.100:8080/api/v1" />
+              <Input label="Usuário" reg={register('username')} error={errors.username?.message} />
+              <Input type="password" label="Senha" reg={register('password')} error={errors.password?.message} />
+              <Input label="Organization ID" reg={register('organizationId')} error={errors.organizationId?.message} />
+            </div>
+          </section>
+
+          <section className="actions">
+            <button onClick={testAPI} disabled={loading} className="btn btn-primary">
+              {loading && <Loader2 className="animate-spin" size={18} />}
+              Testar API
+            </button>
+
+            {status !== 'running' ? (
+              <button onClick={start} className="btn btn-success">
+                <PlayCircle size={18} /> Iniciar Envio
+              </button>
+            ) : (
+              <button onClick={stop} className="btn btn-danger">
+                <Square size={18} /> Parar Envio
+              </button>
+            )}
+          </section>
+
+          {message && (
+            <div className={`feedback feedback-${status}`}>
+              {status === 'running' && <CheckCircle size={18} />}
+              {status === 'error' && <WifiOff size={18} />}
+              {status === 'testing' && <Loader2 size={18} className="animate-spin" />}
+              <span>{message}</span>
+            </div>
           )}
         </div>
-
-        {message && (
-          <div className={`
-            mt-4 text-sm px-3 py-2 rounded-lg flex items-center gap-2 border
-            ${status === 'running' ? 'bg-green-100 border-green-300 text-green-800' :
-              status === 'error' ? 'bg-red-100 border-red-300 text-red-800' :
-                status === 'testing' ? 'bg-blue-100 border-blue-300 text-blue-800' :
-                  'bg-gray-100 border-gray-300 text-gray-700'}
-          `}>
-            {status === 'running' && <CheckCircle size={18} className="text-green-700" />}
-            {status === 'error' && <WifiOff size={18} className="text-red-700" />}
-            {status === 'testing' && <Loader2 size={18} className="animate-spin text-blue-700" />}
-            <span>{message}</span>
-          </div>
-        )}
       </div>
     </div>
   )
@@ -129,11 +164,10 @@ export default function App() {
 
 function Input({ label, error, type = "text", reg, placeholder }: any) {
   return (
-    <div>
-      <label className="block text-sm text-slate-700 font-medium mb-1">{label}</label>
-      <input {...reg} type={type} placeholder={placeholder}
-        className="w-full border rounded-lg px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500" />
-      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+    <div className="field">
+      <label>{label}</label>
+      <input {...reg} type={type} placeholder={placeholder} />
+      {error && <p className="field-error">{error}</p>}
     </div>
   )
 }

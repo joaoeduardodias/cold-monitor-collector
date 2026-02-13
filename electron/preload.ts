@@ -15,6 +15,9 @@ interface ElectronAPI {
   start: () => Promise<void>
   stop: () => Promise<void>
   testSitrad: (cfg: Config) => Promise<unknown>
+  minimizeWindow: () => Promise<void>
+  toggleMaximizeWindow: () => Promise<void>
+  closeWindow: () => Promise<void>
 }
 
 const api: ElectronAPI = {
@@ -24,6 +27,9 @@ const api: ElectronAPI = {
   start: () => ipcRenderer.invoke('start'),
   stop: () => ipcRenderer.invoke('stop'),
   testSitrad: (cfg) => ipcRenderer.invoke('test-sitrad-api', cfg),
+  minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window-toggle-maximize'),
+  closeWindow: () => ipcRenderer.invoke('window-close'),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)
