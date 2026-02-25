@@ -5,14 +5,20 @@ import { useForm } from 'react-hook-form'
 import * as z from 'zod'
 
 const configSchema = z.object({
-  sitradUrl: z.url("URL inválida"),
+  sitradUrl: z.string().url("URL inválida"),
   username: z.string().min(1, "Usuário obrigatório"),
   password: z.string().min(1, "Senha obrigatória"),
-  organizationId: z.uuid("Formato Inválido").min(1, "Organization ID obrigatório"),
+  setupToken: z.string().optional(),
 })
 
 type ConfigData = z.infer<typeof configSchema>
 type Status = 'running' | 'stopped' | 'testing' | 'idle' | 'error'
+type SavedConfig = Partial<{
+  sitradUrl: string
+  username: string
+  password: string
+  setupToken: string
+}>
 
 function getStatusLabel(status: Status) {
   if (status === 'running') return 'Ativo'
@@ -32,14 +38,14 @@ export default function App() {
   const [message, setMessage] = useState('')
 
   async function loadInitialState() {
-    const config = await window.electronAPI.getConfig()
+    const config = await window.electronAPI.getConfig() as SavedConfig | undefined
     const running = await window.electronAPI.getState()
 
     if (config) {
-      setValue('sitradUrl', config.sitradUrl)
-      setValue('username', config.username)
-      setValue('password', config.password)
-      setValue('organizationId', config.organizationId)
+      setValue('sitradUrl', config.sitradUrl ?? '')
+      setValue('username', config.username ?? '')
+      setValue('password', config.password ?? '')
+      setValue('setupToken', config.setupToken ?? '')
     }
 
     setStatus(running ? 'running' : 'stopped')
@@ -55,6 +61,7 @@ export default function App() {
     setMessage('Testando conexão com o Sitrad...')
 
     try {
+      await window.electronAPI.saveConfig(data)
       const result = await window.electronAPI.testSitrad(data)
       if (result.success) {
         setMessage('Conexão OK!')
@@ -71,8 +78,9 @@ export default function App() {
   const start = handleSubmit(async (data) => {
     await window.electronAPI.saveConfig(data)
     await window.electronAPI.start()
-    setStatus('running')
-    setMessage('Enviando dados...')
+    const running = await window.electronAPI.getState()
+    setStatus(running ? 'running' : 'error')
+    setMessage(running ? 'Enviando dados...' : 'Falha ao iniciar o envio. Revise as configurações.')
   })
 
   const stop = async () => {
@@ -127,7 +135,7 @@ export default function App() {
               <Input label="URL da API Sitrad" reg={register('sitradUrl')} error={errors.sitradUrl?.message} placeholder="https://192.168.0.100:8080/api/v1" />
               <Input label="Usuário" reg={register('username')} error={errors.username?.message} />
               <Input type="password" label="Senha" reg={register('password')} error={errors.password?.message} />
-              <Input label="Organization ID" reg={register('organizationId')} error={errors.organizationId?.message} />
+              <Input type="password" label="Token de ativação (primeiro acesso)" reg={register('setupToken')} error={errors.setupToken?.message} />
             </div>
           </section>
 

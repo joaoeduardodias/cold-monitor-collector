@@ -4,17 +4,13 @@ interface Config {
   [key: string]: unknown
 }
 
-interface State {
-  [key: string]: unknown
-}
-
 interface ElectronAPI {
   getConfig: () => Promise<Config>
-  getState: () => Promise<State>
+  getState: () => Promise<boolean>
   saveConfig: (cfg: Config) => Promise<void>
-  start: () => Promise<void>
+  start: () => Promise<unknown>
   stop: () => Promise<void>
-  testSitrad: (cfg: Config) => Promise<unknown>
+  testSitrad: (cfg: Config) => Promise<{ success: boolean, error?: string }>
   minimizeWindow: () => Promise<void>
   toggleMaximizeWindow: () => Promise<void>
   closeWindow: () => Promise<void>
