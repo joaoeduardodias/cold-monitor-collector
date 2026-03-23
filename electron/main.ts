@@ -2,12 +2,13 @@ import axios from 'axios'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import log from 'electron-log'
 import https from 'https'
+import path from 'node:path'
 import WebSocket from 'ws'
-import { startAppCollector, stopCollector } from './collector-service'
+import { startAppCollector, stopCollector, type CollectorRuntimeEvent, setCollectorRuntimeEventHandler } from './collector-service'
 import { WS_URL } from './constants'
 import { hydrateAuthFromDeviceConfig } from './device-auth'
 import { store } from './store'
-import { configureTrayActions, createTray, createWindow, setTray } from './window-tray'
+import { configureTrayActions, createTray, createWindow, requestStopAuthFromRenderer, setTray } from './window-tray'
 
 process.on('uncaughtException', (err) => {
   log?.error?.('uncaughtException:', err)
@@ -20,6 +21,17 @@ process.on('unhandledRejection', (reason) => {
 app.disableHardwareAcceleration()
 
 const agent = new https.Agent({ rejectUnauthorized: false })
+
+function broadcastCollectorEvent(event: CollectorRuntimeEvent) {
+  const windows = BrowserWindow.getAllWindows()
+  windows.forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('collector-runtime-event', event)
+    }
+  })
+}
+
+setCollectorRuntimeEventHandler(broadcastCollectorEvent)
 
 function testBackendWebSocketConnection(timeout = 3000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -66,7 +78,7 @@ configureTrayActions({
     void startAppCollector()
   },
   stop: () => {
-    stopCollector()
+    requestStopAuthFromRenderer()
   },
 })
 
@@ -78,13 +90,28 @@ ipcMain.handle('save-config', (_e, cfg) => {
     sitradUrl: cfg?.sitradUrl ?? prev?.sitradUrl ?? '',
     username: cfg?.username ?? prev?.username ?? '',
     password: cfg?.password ?? prev?.password ?? '',
+    stopPassword: cfg?.stopPassword ?? prev?.stopPassword ?? '',
     organizationId: cfg?.organizationId ?? prev?.organizationId ?? '',
     token: cfg?.token ?? prev?.token ?? '',
     setupToken: cfg?.setupToken ?? prev?.setupToken ?? '',
   })
 })
 ipcMain.handle('start', async () => startAppCollector())
-ipcMain.handle('stop', () => stopCollector())
+ipcMain.handle('stop-with-auth', (_e, password: string) => {
+  const savedPassword = store.get('config')?.stopPassword
+
+  if (!savedPassword) {
+    return { success: false, error: 'Senha de parada não configurada para validação.' }
+  }
+
+  if (password !== savedPassword) {
+    log.warn('Stop denied: invalid stop authentication password')
+    return { success: false, error: 'Senha inválida.' }
+  }
+
+  stopCollector()
+  return { success: true }
+})
 ipcMain.handle('window-minimize', (event) => {
   BrowserWindow.fromWebContents(event.sender)?.minimize()
 })
@@ -108,6 +135,7 @@ ipcMain.handle('test-sitrad-api', async (_e, config) => {
       sitradUrl: config?.sitradUrl ?? previous?.sitradUrl ?? '',
       username: config?.username ?? previous?.username ?? '',
       password: config?.password ?? previous?.password ?? '',
+      stopPassword: config?.stopPassword ?? previous?.stopPassword ?? '',
       setupToken: config?.setupToken ?? previous?.setupToken ?? '',
       organizationId: config?.organizationId ?? previous?.organizationId ?? '',
       token: config?.token ?? previous?.token ?? '',
@@ -146,6 +174,15 @@ app.setLoginItemSettings({
 })
 
 app.whenReady().then(async () => {
+  const appIconPath =
+    process.env.NODE_ENV === 'development'
+      ? path.join(process.cwd(), 'public', 'LOGO.png')
+      : path.join(process.resourcesPath, 'public', 'LOGO.png')
+
+  if (process.platform === 'darwin') {
+    app.dock.setIcon(appIconPath)
+  }
+
   await hydrateAuthFromDeviceConfig()
 
   createTray()

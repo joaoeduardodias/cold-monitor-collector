@@ -4,6 +4,7 @@ export type CollectorConfig = {
   sitradUrl: string
   username: string
   password: string
+  stopPassword: string
   organizationId: string
   token: string
   setupToken: string

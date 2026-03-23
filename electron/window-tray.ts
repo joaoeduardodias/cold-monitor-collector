@@ -8,9 +8,32 @@ let tray: Tray | null = null
 let startCollectorHandler: (() => void) | null = null
 let stopCollectorHandler: (() => void) | null = null
 
+function getAppIconPath() {
+  return process.env.NODE_ENV === 'development'
+    ? path.join(process.cwd(), 'public', 'LOGO.png')
+    : path.join(process.resourcesPath, 'public', 'LOGO.png')
+}
+
 export function configureTrayActions(actions: { start: () => void; stop: () => void }) {
   startCollectorHandler = actions.start
   stopCollectorHandler = actions.stop
+}
+
+export function requestStopAuthFromRenderer() {
+  if (!win) createWindow()
+  if (!win) return
+
+  win.show()
+  win.focus()
+
+  if (win.webContents.isLoadingMainFrame()) {
+    win.webContents.once('did-finish-load', () => {
+      win?.webContents.send('request-stop-auth')
+    })
+    return
+  }
+
+  win.webContents.send('request-stop-auth')
 }
 
 export function setTray(running: boolean) {
@@ -48,6 +71,7 @@ export function createWindow() {
     transparent: true,
     backgroundColor: '#00000000',
     roundedCorners: true,
+    icon: getAppIconPath(),
     webPreferences: {
       preload: path.join(MAIN_DIST, 'preload.mjs'),
     }
@@ -67,10 +91,7 @@ export function createWindow() {
 }
 
 export function createTray() {
-  const trayImagePath =
-    process.env.NODE_ENV === 'development'
-      ? path.join(process.cwd(), 'public', 'tray.png')
-      : path.join(process.resourcesPath, 'tray.png')
+  const trayImagePath = getAppIconPath()
 
   const trayIcon = nativeImage.createFromPath(trayImagePath)
   tray = new Tray(trayIcon)

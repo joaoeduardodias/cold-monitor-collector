@@ -16,7 +16,7 @@ extraResources:
 win:
   target:
     - nsis
-  icon: "public/installer.ico"
+  icon: "public/LOGO.png"
   artifactName: "ColdMonitorAgent-Setup-${version}.exe"
 
 nsis:

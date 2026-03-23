@@ -308,6 +308,62 @@ body {
   color: #334155;
 }
 
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  z-index: 20;
+}
+
+.modal-panel {
+  width: min(100%, 420px);
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--white);
+  padding: 16px;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
+  display: grid;
+  gap: 10px;
+}
+
+.modal-panel h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #0b2347;
+}
+
+.modal-panel p {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+}
+
+.modal-panel input {
+  width: 100%;
+  border: 1px solid #9aa8bb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 16px;
+  background: #fcfdff;
+  color: #0f172a;
+  outline: none;
+}
+
+.modal-panel input:focus {
+  border-color: var(--brand-700);
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.15);
+}
+
+.modal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
 @media (max-width: 640px) {
   .app-backdrop {
     padding: 6px;

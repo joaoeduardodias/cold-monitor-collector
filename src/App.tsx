@@ -36,6 +36,11 @@ export default function App() {
   const [status, setStatus] = useState<Status>('idle')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
+  const [showStopAuthModal, setShowStopAuthModal] = useState(false)
+  const [stopAuthPassword, setStopAuthPassword] = useState('')
+  const [stopping, setStopping] = useState(false)
+  const [startBlocked, setStartBlocked] = useState(false)
+  const [startBlockedReason, setStartBlockedReason] = useState('')
 
   async function loadInitialState() {
     const config = await window.electronAPI.getConfig() as SavedConfig | undefined
@@ -51,14 +56,12 @@ export default function App() {
     setStatus(running ? 'running' : 'stopped')
   }
 
-  useEffect(() => {
-    loadInitialState()
-  }, [])
-
   const testAPI = handleSubmit(async (data) => {
     setLoading(true)
     setStatus('testing')
     setMessage('Testando conexão com o Sitrad...')
+    setStartBlocked(false)
+    setStartBlockedReason('')
 
     try {
       await window.electronAPI.saveConfig(data)
@@ -76,6 +79,14 @@ export default function App() {
   })
 
   const start = handleSubmit(async (data) => {
+    if (startBlocked) {
+      const warning = startBlockedReason || 'Ja existe um agente ativo para esta organizacao.'
+      setStatus('error')
+      setMessage(warning)
+      window.alert(warning)
+      return
+    }
+
     await window.electronAPI.saveConfig(data)
     await window.electronAPI.start()
     const running = await window.electronAPI.getState()
@@ -83,11 +94,54 @@ export default function App() {
     setMessage(running ? 'Enviando dados...' : 'Falha ao iniciar o envio. Revise as configurações.')
   })
 
+  const openStopAuthModal = () => {
+    setStopAuthPassword('')
+    setShowStopAuthModal(true)
+  }
+
   const stop = async () => {
-    await window.electronAPI.stop()
+    if (!stopAuthPassword.trim()) {
+      setStatus('error')
+      setMessage('Digite a senha de parada para interromper o envio.')
+      return
+    }
+
+    setStopping(true)
+    const result = await window.electronAPI.stopWithAuth(stopAuthPassword)
+    setStopping(false)
+    if (!result.success) {
+      setStatus('error')
+      setMessage(result.error ?? 'Senha inválida.')
+      return
+    }
+
+    setShowStopAuthModal(false)
     setStatus('stopped')
     setMessage('Envio interrompido.')
   }
+
+  useEffect(() => {
+    void loadInitialState()
+    const unsubscribeStopAuth = window.electronAPI.onStopAuthRequested(() => {
+      openStopAuthModal()
+    })
+    const unsubscribeCollectorEvent = window.electronAPI.onCollectorRuntimeEvent((event) => {
+      if (event.code === 'AGENT_ALREADY_RUNNING') {
+        setStartBlocked(true)
+        setStartBlockedReason(event.message)
+        window.alert(event.message)
+      } else if (event.status === 'running') {
+        setStartBlocked(false)
+        setStartBlockedReason('')
+      }
+      setStatus(event.status)
+      setMessage(event.message)
+    })
+    return () => {
+      unsubscribeStopAuth()
+      unsubscribeCollectorEvent()
+    }
+  }, [])
 
   const minimizeWindow = async () => {
     await window.electronAPI.minimizeWindow()
@@ -146,11 +200,11 @@ export default function App() {
             </button>
 
             {status !== 'running' ? (
-              <button onClick={start} className="btn btn-success">
+              <button onClick={start} className="btn btn-success" disabled={startBlocked}>
                 <PlayCircle size={18} /> Iniciar Envio
               </button>
             ) : (
-              <button onClick={stop} className="btn btn-danger">
+              <button onClick={openStopAuthModal} className="btn btn-danger">
                 <Square size={18} /> Parar Envio
               </button>
             )}
@@ -162,6 +216,34 @@ export default function App() {
               {status === 'error' && <WifiOff size={18} />}
               {status === 'testing' && <Loader2 size={18} className="animate-spin" />}
               <span>{message}</span>
+            </div>
+          )}
+
+          {showStopAuthModal && (
+            <div className="modal-overlay">
+              <div className="modal-panel">
+                <h2>Autenticar parada</h2>
+                <p>Digite a senha para interromper o envio.</p>
+                <input
+                  type="password"
+                  value={stopAuthPassword}
+                  onChange={(event) => setStopAuthPassword(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void stop()
+                  }}
+                  placeholder="Senha de parada"
+                  autoFocus
+                />
+                <div className="modal-actions">
+                  <button type="button" className="btn btn-primary" onClick={() => setShowStopAuthModal(false)} disabled={stopping}>
+                    Cancelar
+                  </button>
+                  <button type="button" className="btn btn-danger" onClick={stop} disabled={stopping}>
+                    {stopping && <Loader2 className="animate-spin" size={18} />}
+                    Confirmar parada
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

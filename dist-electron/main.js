@@ -26,10 +26,10 @@ import require$$0$6, { EventEmitter as EventEmitter$1 } from "events";
 import electron, { nativeImage, Tray, BrowserWindow, Menu, app as app$1, ipcMain as ipcMain$1 } from "electron";
 import require$$0$5 from "child_process";
 import require$$1$3 from "os";
+import path$1 from "node:path";
 import require$$3$2 from "net";
 import require$$4$2 from "tls";
 import require$$0$7 from "buffer";
-import path$1 from "node:path";
 import { fileURLToPath } from "node:url";
 import fs$1, { existsSync, readFileSync } from "node:fs";
 import process$1 from "node:process";
@@ -33175,14 +33175,17 @@ function readExternalDeviceConfig() {
       const setupToken = typeof parsed.setupToken === "string" ? parsed.setupToken.trim() : void 0;
       const organizationId = typeof parsed.organizationId === "string" ? parsed.organizationId.trim() : void 0;
       const token = typeof parsed.token === "string" ? parsed.token.trim() : void 0;
-      if (!setupToken && !token && !organizationId) {
-        log.warn(`Ignoring invalid config.json at ${filePath}: expected setupToken and/or token`);
+      const stopPasswordRaw = typeof parsed.stopPassword === "string" ? parsed.stopPassword : void 0;
+      const stopPassword = typeof stopPasswordRaw === "string" ? stopPasswordRaw.trim() : void 0;
+      if (!setupToken && !token && !organizationId && !stopPassword) {
+        log.warn(`Ignoring invalid config.json at ${filePath}: expected setupToken, token, organizationId or stopPassword`);
         continue;
       }
       return {
         setupToken,
         organizationId,
-        token
+        token,
+        stopPassword
       };
     } catch (err) {
       log.error(`Failed to read config.json at ${filePath}:`, err);
@@ -33213,8 +33216,9 @@ async function loginWithSetupToken(payload) {
     const data = response.data;
     const token = data == null ? void 0 : data.token;
     const organizationId = data == null ? void 0 : data.organizationId;
+    const stopPassword = typeof (data == null ? void 0 : data.stopPassword) === "string" ? data.stopPassword.trim() : void 0;
     if (typeof token === "string" && token.length > 0 && typeof organizationId === "string" && organizationId.length > 0) {
-      return { token, organizationId };
+      return { token, organizationId, stopPassword };
     }
   } catch {
     log.error("Setup token login request failed", { url: url2 });
@@ -33224,12 +33228,11 @@ async function loginWithSetupToken(payload) {
 async function hydrateAuthFromDeviceConfig() {
   const external = readExternalDeviceConfig();
   const current = store.get("config");
-  const hasJwt = typeof (current == null ? void 0 : current.token) === "string" && current.token.length > 0;
-  const hasOrgId = typeof (current == null ? void 0 : current.organizationId) === "string" && current.organizationId.length > 0;
   const persisted = {
     sitradUrl: (current == null ? void 0 : current.sitradUrl) ?? "",
     username: (current == null ? void 0 : current.username) ?? "",
     password: (current == null ? void 0 : current.password) ?? "",
+    stopPassword: (current == null ? void 0 : current.stopPassword) ?? "",
     organizationId: (current == null ? void 0 : current.organizationId) ?? "",
     token: (current == null ? void 0 : current.token) ?? "",
     setupToken: (current == null ? void 0 : current.setupToken) ?? ""
@@ -33237,43 +33240,35 @@ async function hydrateAuthFromDeviceConfig() {
   const externalToken = external == null ? void 0 : external.token;
   const externalOrgId = external == null ? void 0 : external.organizationId;
   const externalSetupToken = external == null ? void 0 : external.setupToken;
+  const externalStopPassword = external == null ? void 0 : external.stopPassword;
+  const setupToken = (externalSetupToken ?? persisted.setupToken).trim();
+  persisted.setupToken = setupToken;
+  persisted.stopPassword = externalStopPassword ?? persisted.stopPassword;
+  const hasPersistedAuth = typeof persisted.token === "string" && persisted.token.trim().length > 0 && typeof persisted.organizationId === "string" && persisted.organizationId.trim().length > 0;
+  const hasExternalAuth = typeof externalToken === "string" && externalToken.trim().length > 0 && typeof externalOrgId === "string" && externalOrgId.trim().length > 0;
+  if (setupToken && !hasPersistedAuth && !hasExternalAuth) {
+    const login = await loginWithSetupToken(
+      { setupToken }
+    );
+    if (!login) {
+      store.set("config", persisted);
+      log.warn("Automatic setupToken login failed. Keeping previous authentication data.");
+      return;
+    }
+    persisted.token = login.token;
+    persisted.organizationId = login.organizationId;
+    persisted.stopPassword = login.stopPassword || persisted.stopPassword;
+    store.set("config", persisted);
+    log.info("Automatic authentication by setupToken completed.");
+    return;
+  }
   if (typeof externalToken === "string" && externalToken.length > 0 && typeof externalOrgId === "string" && externalOrgId.length > 0) {
     persisted.token = externalToken;
     persisted.organizationId = externalOrgId;
-    persisted.setupToken = externalSetupToken ?? persisted.setupToken;
-    store.set("config", persisted);
-    return;
   }
-  if (hasJwt && hasOrgId) {
-    persisted.setupToken = externalSetupToken ?? persisted.setupToken;
-    store.set("config", persisted);
-    return;
-  }
-  const setupToken = (persisted.setupToken || externalSetupToken || "").trim();
-  if (!setupToken) {
-    store.set("config", persisted);
-    return;
-  }
-  const login = await loginWithSetupToken(
-    { setupToken }
-  );
-  if (!login) {
-    persisted.setupToken = setupToken;
-    store.set("config", persisted);
-    log.warn("Automatic setupToken login failed. Keeping manual authentication flow.");
-    return;
-  }
-  persisted.token = login.token;
-  persisted.organizationId = login.organizationId;
-  persisted.setupToken = "";
   store.set("config", persisted);
-  log.info("Automatic authentication by setupToken completed.");
 }
 async function resolveCollectorConfig() {
-  const current = store.get("config");
-  if (current && typeof current.organizationId === "string" && current.organizationId && typeof current.token === "string" && current.token) {
-    return current;
-  }
   await hydrateAuthFromDeviceConfig();
   return store.get("config");
 }
@@ -33361,9 +33356,25 @@ let win = null;
 let tray = null;
 let startCollectorHandler = null;
 let stopCollectorHandler = null;
+function getAppIconPath() {
+  return process.env.NODE_ENV === "development" ? path$1.join(process.cwd(), "public", "LOGO.png") : path$1.join(process.resourcesPath, "public", "LOGO.png");
+}
 function configureTrayActions(actions) {
   startCollectorHandler = actions.start;
   stopCollectorHandler = actions.stop;
+}
+function requestStopAuthFromRenderer() {
+  if (!win) createWindow();
+  if (!win) return;
+  win.show();
+  win.focus();
+  if (win.webContents.isLoadingMainFrame()) {
+    win.webContents.once("did-finish-load", () => {
+      win == null ? void 0 : win.webContents.send("request-stop-auth");
+    });
+    return;
+  }
+  win.webContents.send("request-stop-auth");
 }
 function setTray(running) {
   tray == null ? void 0 : tray.setContextMenu(Menu.buildFromTemplate([
@@ -33399,6 +33410,7 @@ function createWindow() {
     transparent: true,
     backgroundColor: "#00000000",
     roundedCorners: true,
+    icon: getAppIconPath(),
     webPreferences: {
       preload: path$1.join(MAIN_DIST, "preload.mjs")
     }
@@ -33414,7 +33426,7 @@ function createWindow() {
   });
 }
 function createTray() {
-  const trayImagePath = process.env.NODE_ENV === "development" ? path$1.join(process.cwd(), "public", "tray.png") : path$1.join(process.resourcesPath, "tray.png");
+  const trayImagePath = getAppIconPath();
   const trayIcon = nativeImage.createFromPath(trayImagePath);
   tray = new Tray(trayIcon);
 }
@@ -33422,13 +33434,193 @@ let socket = null;
 let reconnectTimeout = null;
 let isSocketAuthenticated = false;
 let collectorRunId = 0;
+let runtimeEventHandler = null;
 let instrumentMapping = {};
+const commandOverridesBySitradId = /* @__PURE__ */ new Map();
+const httpsAgent = new https$4.Agent({ rejectUnauthorized: false });
+function setCollectorRuntimeEventHandler(handler) {
+  runtimeEventHandler = handler;
+}
+function emitRuntimeEvent(event) {
+  runtimeEventHandler == null ? void 0 : runtimeEventHandler(event);
+}
+function isAgentAlreadyRunningMessage(message) {
+  if (!message) return false;
+  return /(already.*(agent|collector).*(running|online))|(organization.*already.*running)|(ja.*(agente|coletor).*(rodando|executando))/i.test(message.normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+}
 function sendWsMessage(message) {
   if (!socket || socket.readyState !== WebSocket$1.OPEN) return;
   socket.send(JSON.stringify(message));
 }
 function sleep(ms2) {
   return new Promise((resolve2) => setTimeout(resolve2, ms2));
+}
+function isInstrumentCommandAction(value) {
+  return value === "SET_DEFROST" || value === "SET_FAN" || value === "SET_SETPOINT" || value === "SET_DIFFERENTIAL";
+}
+function resolveDifferentialFunctionCode(model) {
+  if (model === 72) return "F02";
+  if (model === 73) return "F05";
+  return null;
+}
+async function postToSitradInstrumentEndpoint(id2, endpoint, dataBody) {
+  const config = store.get("config");
+  if (!(config == null ? void 0 : config.sitradUrl) || !config.username || !config.password) {
+    log.warn(`Skipping Sitrad ${endpoint} call for idSitrad=${id2}: missing Sitrad credentials in store config`);
+    return;
+  }
+  const base = config.sitradUrl.replace(/\/+$/, "");
+  await axios.post(
+    `${base}/instruments/${id2}/${endpoint}`,
+    dataBody,
+    {
+      auth: { username: config.username, password: config.password },
+      httpsAgent,
+      timeout: 8e3
+    }
+  );
+}
+async function setSitradDifferential(id2, differential, model) {
+  const code2 = resolveDifferentialFunctionCode(model);
+  if (!code2) {
+    log.warn(`Skipping SET_DIFFERENTIAL for idSitrad=${id2}: unsupported model=${model ?? "unknown"}`);
+    return;
+  }
+  const dataBody = {
+    code: code2,
+    value: differential,
+    showSpc: true
+  };
+  await postToSitradInstrumentEndpoint(id2, "functions", dataBody);
+}
+async function setSitradDefrost(id2, active, model) {
+  let dataBody = null;
+  if (model === 73) {
+    dataBody = {
+      code: "INV",
+      value: active ? 0 : 1,
+      groupCode: null,
+      showSpc: true
+    };
+  } else if (model === 72) {
+    dataBody = {
+      code: "DEFR",
+      value: 0,
+      groupCode: null,
+      showSpc: true
+    };
+  }
+  if (!dataBody) {
+    log.warn(`Skipping SET_DEFROST for idSitrad=${id2}: unsupported model=${model ?? "unknown"}`);
+    return;
+  }
+  await postToSitradInstrumentEndpoint(id2, "commands", dataBody);
+}
+async function setSitradFan(id2, active, model) {
+  if (model !== 72) {
+    log.warn(`Skipping SET_FAN for idSitrad=${id2}: unsupported model=${model ?? "unknown"}`);
+    return;
+  }
+  const dataBody = {
+    code: "F21",
+    value: active ? 7 : 4,
+    showSpc: true
+  };
+  await postToSitradInstrumentEndpoint(id2, "functions", dataBody);
+}
+function resolveSetpointFunctionCode(model) {
+  if (model === 72) return "F31";
+  if (model === 73) return "SET";
+  return "F01";
+}
+async function setSitradSetpoint(id2, setpoint, model) {
+  const dataBody = {
+    code: resolveSetpointFunctionCode(model),
+    value: setpoint,
+    showSpc: true
+  };
+  await postToSitradInstrumentEndpoint(id2, "functions", dataBody);
+}
+async function applyInstrumentCommand(payload) {
+  if (typeof payload.idSitrad !== "number") {
+    log.warn(`Ignoring INSTRUMENT_COMMAND without idSitrad for instrumentId=${payload.instrumentId}`);
+    return;
+  }
+  const previous = commandOverridesBySitradId.get(payload.idSitrad) ?? {};
+  const next2 = { ...previous };
+  if (payload.action === "SET_DEFROST" && typeof payload.value === "boolean") {
+    next2.forceDefrost = payload.value;
+  }
+  if (payload.action === "SET_FAN" && typeof payload.value === "boolean") {
+    next2.forceFan = payload.value;
+  }
+  if (payload.action === "SET_SETPOINT" && typeof payload.value === "number") {
+    next2.setPoint = payload.value;
+  }
+  if (payload.action === "SET_DIFFERENTIAL" && typeof payload.value === "number") {
+    next2.differential = payload.value;
+  }
+  commandOverridesBySitradId.set(payload.idSitrad, next2);
+  if (payload.action === "SET_DIFFERENTIAL" && typeof payload.value === "number") {
+    const model = payload.modelId;
+    try {
+      await setSitradDifferential(payload.idSitrad, payload.value, model);
+    } catch (err) {
+      log.error(
+        `Failed to apply SET_DIFFERENTIAL in Sitrad idSitrad=${payload.idSitrad} model=${model ?? "unknown"}:`,
+        err
+      );
+    }
+  }
+  if (payload.action === "SET_DEFROST" && typeof payload.value === "boolean") {
+    const model = payload.modelId;
+    try {
+      await setSitradDefrost(payload.idSitrad, payload.value, model);
+    } catch (err) {
+      log.error(
+        `Failed to apply SET_DEFROST in Sitrad idSitrad=${payload.idSitrad} model=${model ?? "unknown"}:`,
+        err
+      );
+    }
+  }
+  if (payload.action === "SET_FAN" && typeof payload.value === "boolean") {
+    const model = payload.modelId;
+    try {
+      await setSitradFan(payload.idSitrad, payload.value, model);
+    } catch (err) {
+      log.error(
+        `Failed to apply SET_FAN in Sitrad idSitrad=${payload.idSitrad} model=${model ?? "unknown"}:`,
+        err
+      );
+    }
+  }
+  if (payload.action === "SET_SETPOINT" && typeof payload.value === "number") {
+    const model = payload.modelId;
+    try {
+      await setSitradSetpoint(payload.idSitrad, payload.value, model);
+    } catch (err) {
+      log.error(
+        `Failed to apply SET_SETPOINT in Sitrad idSitrad=${payload.idSitrad} model=${model ?? "unknown"}:`,
+        err
+      );
+    }
+  }
+  log.info(`INSTRUMENT_COMMAND received action=${payload.action} idSitrad=${payload.idSitrad}`);
+}
+function applyCommandOverridesToSnapshot(inst) {
+  const override = commandOverridesBySitradId.get(inst.id);
+  if (!override) return inst;
+  return {
+    ...inst,
+    IsDefrost: override.forceDefrost ?? inst.IsDefrost,
+    IsOutputDefr1: override.forceDefrost ?? inst.IsOutputDefr1,
+    IsOutputFan: override.forceFan ?? inst.IsOutputFan,
+    CurrentSetpoint: override.setPoint ?? inst.CurrentSetpoint,
+    FncSetpoint: override.setPoint ?? inst.FncSetpoint,
+    Setpoint1RelativeTemp: override.setPoint ?? inst.Setpoint1RelativeTemp,
+    CurrentDifferential: override.differential ?? inst.CurrentDifferential,
+    FncDifferential: override.differential ?? inst.FncDifferential
+  };
 }
 function mapInstrumentsForCreate(instruments, organizationId) {
   return instruments.map((inst) => ({
@@ -33452,20 +33644,24 @@ function mapInstrumentsForReading(instruments, organizationId) {
         return inst.Sensor1 ?? 0;
     }
   }
-  return instruments.map((inst) => ({
-    idSitrad: inst.id,
-    name: inst.name,
-    slug: createSlug(inst.name),
-    model: inst.modelId ?? 0,
-    type: inst.modelId === 67 ? "PRESSURE" : "TEMPERATURE",
-    value: resolveInstrumentValue(inst),
-    status: getProcessStatus(inst),
-    setPoint: Number(inst.modelId === 73 ? inst.FncSetpoint : inst.modelId === 78 ? inst.Setpoint1RelativeTemp : inst.CurrentSetpoint ?? 0),
-    differential: inst.CurrentDifferential ?? 0,
-    isSensorError: Boolean(inst.modelId === 67 ? inst.IsErrorPressureSensor : inst.modelId === 73 ? inst.IsSensorError : inst.IsErrorS1),
-    error: Boolean(inst.error),
-    organizationId
-  }));
+  return instruments.map((rawInst) => {
+    const inst = applyCommandOverridesToSnapshot(rawInst);
+    return {
+      idSitrad: inst.id,
+      name: inst.name,
+      slug: createSlug(inst.name),
+      model: inst.modelId ?? 0,
+      type: inst.modelId === 67 ? "PRESSURE" : "TEMPERATURE",
+      value: resolveInstrumentValue(inst),
+      status: getProcessStatus(inst),
+      setPoint: Number(inst.modelId === 73 ? inst.FncSetpoint : inst.modelId === 78 ? inst.Setpoint1RelativeTemp : inst.CurrentSetpoint ?? 0),
+      differential: inst.CurrentDifferential ?? 0,
+      isSensorError: Boolean(inst.modelId === 67 ? inst.IsErrorPressureSensor : inst.modelId === 73 ? inst.IsSensorError : inst.IsErrorS1),
+      error: Boolean(inst.error),
+      isFan: Boolean(inst.IsOutputFan),
+      organizationId
+    };
+  });
 }
 async function runCollectorLoop(config, runId) {
   while (store.get("isRunning") && runId === collectorRunId) {
@@ -33519,6 +33715,7 @@ async function startAppCollector() {
     log.warn("Collector not started: missing Sitrad credentials.");
     store.set("isRunning", false);
     setTray(false);
+    emitRuntimeEvent({ status: "error", message: "Falha ao iniciar: credenciais do Sitrad ausentes." });
     return;
   }
   if ((!config.token || !config.organizationId) && ((_a = config.setupToken) == null ? void 0 : _a.trim())) {
@@ -33529,7 +33726,8 @@ async function startAppCollector() {
         sitradUrl: (prev == null ? void 0 : prev.sitradUrl) ?? config.sitradUrl,
         username: (prev == null ? void 0 : prev.username) ?? config.username,
         password: (prev == null ? void 0 : prev.password) ?? config.password,
-        setupToken: "",
+        stopPassword: login.stopPassword ?? (prev == null ? void 0 : prev.stopPassword) ?? config.stopPassword ?? "",
+        setupToken: config.setupToken.trim(),
         token: login.token,
         organizationId: login.organizationId
       });
@@ -33540,11 +33738,13 @@ async function startAppCollector() {
     log.warn("Collector not started: missing activation token authentication.");
     store.set("isRunning", false);
     setTray(false);
+    emitRuntimeEvent({ status: "error", message: "Falha ao iniciar: autenticação do dispositivo inválida." });
     return;
   }
   store.set("isRunning", true);
   setTray(true);
   log.info("Collector started");
+  emitRuntimeEvent({ status: "running", message: "Conectando ao servidor do coletor..." });
   if (socket) socket.close();
   isSocketAuthenticated = false;
   log.info(`Connecting to collector WS: ${WS_URL}`);
@@ -33564,20 +33764,39 @@ async function startAppCollector() {
     });
   });
   socket.on("message", (raw) => {
+    var _a2;
     try {
       const msg = JSON.parse(raw.toString());
+      if (msg.type === "AGENT_ALREADY_RUNNING") {
+        const warning = msg.message || "Ja existe um agente ativo para esta organizacao.";
+        isSocketAuthenticated = false;
+        store.set("isRunning", false);
+        setTray(false);
+        emitRuntimeEvent({ status: "error", code: "AGENT_ALREADY_RUNNING", message: warning });
+        socket == null ? void 0 : socket.close();
+        return;
+      }
       if (msg.type === "AUTH_ERROR") {
         isSocketAuthenticated = false;
         store.set("isRunning", false);
         setTray(false);
-        log.error(`WS auth error: ${msg.message || "unknown error"}`);
+        const isAlreadyRunning = isAgentAlreadyRunningMessage(msg.message);
+        const authError = msg.message || "Token inválido.";
+        log.error(`WS auth error: ${authError}`);
+        emitRuntimeEvent({
+          status: "error",
+          code: isAlreadyRunning ? "AGENT_ALREADY_RUNNING" : void 0,
+          message: isAlreadyRunning ? authError : `Erro de autenticacao: ${authError}`
+        });
         socket == null ? void 0 : socket.close();
         return;
       }
       if (msg.type === "AUTH_OK") {
         isSocketAuthenticated = true;
+        emitRuntimeEvent({ status: "running", message: "Enviando dados..." });
         void runCollectorLoop(config, runId).catch((err) => {
           log.error("Collector loop failed:", err);
+          emitRuntimeEvent({ status: "error", message: "Falha no loop de coleta." });
         });
         return;
       }
@@ -33585,6 +33804,10 @@ async function startAppCollector() {
         msg.payload.forEach((inst) => {
           instrumentMapping[inst.slug] = inst.id;
         });
+        return;
+      }
+      if (msg.type === "INSTRUMENT_COMMAND" && isInstrumentCommandAction((_a2 = msg.payload) == null ? void 0 : _a2.action)) {
+        void applyInstrumentCommand(msg.payload);
       }
     } catch (err) {
       log.error("Invalid WS message received:", err);
@@ -33594,7 +33817,11 @@ async function startAppCollector() {
     isSocketAuthenticated = false;
     scheduleReconnect();
   });
-  socket.on("error", () => scheduleReconnect());
+  socket.on("error", (err) => {
+    log.error("Collector WS error:", err);
+    emitRuntimeEvent({ status: "error", message: "Conexão com o servidor interrompida." });
+    scheduleReconnect();
+  });
 }
 function stopCollector() {
   if (reconnectTimeout) {
@@ -33607,6 +33834,7 @@ function stopCollector() {
   if (socket) socket.close();
   isSocketAuthenticated = false;
   log.info("Collector stopped");
+  emitRuntimeEvent({ status: "stopped", message: "Envio interrompido." });
 }
 process.on("uncaughtException", (err) => {
   var _a;
@@ -33618,6 +33846,15 @@ process.on("unhandledRejection", (reason) => {
 });
 app$1.disableHardwareAcceleration();
 const agent = new https$4.Agent({ rejectUnauthorized: false });
+function broadcastCollectorEvent(event) {
+  const windows2 = BrowserWindow.getAllWindows();
+  windows2.forEach((window2) => {
+    if (!window2.isDestroyed()) {
+      window2.webContents.send("collector-runtime-event", event);
+    }
+  });
+}
+setCollectorRuntimeEventHandler(broadcastCollectorEvent);
 function testBackendWebSocketConnection(timeout = 3e3) {
   return new Promise((resolve2, reject) => {
     let ws2 = null;
@@ -33657,7 +33894,7 @@ configureTrayActions({
     void startAppCollector();
   },
   stop: () => {
-    stopCollector();
+    requestStopAuthFromRenderer();
   }
 });
 ipcMain$1.handle("get-config", () => store.get("config"));
@@ -33668,13 +33905,26 @@ ipcMain$1.handle("save-config", (_e, cfg) => {
     sitradUrl: (cfg == null ? void 0 : cfg.sitradUrl) ?? (prev == null ? void 0 : prev.sitradUrl) ?? "",
     username: (cfg == null ? void 0 : cfg.username) ?? (prev == null ? void 0 : prev.username) ?? "",
     password: (cfg == null ? void 0 : cfg.password) ?? (prev == null ? void 0 : prev.password) ?? "",
+    stopPassword: (cfg == null ? void 0 : cfg.stopPassword) ?? (prev == null ? void 0 : prev.stopPassword) ?? "",
     organizationId: (cfg == null ? void 0 : cfg.organizationId) ?? (prev == null ? void 0 : prev.organizationId) ?? "",
     token: (cfg == null ? void 0 : cfg.token) ?? (prev == null ? void 0 : prev.token) ?? "",
     setupToken: (cfg == null ? void 0 : cfg.setupToken) ?? (prev == null ? void 0 : prev.setupToken) ?? ""
   });
 });
 ipcMain$1.handle("start", async () => startAppCollector());
-ipcMain$1.handle("stop", () => stopCollector());
+ipcMain$1.handle("stop-with-auth", (_e, password) => {
+  var _a;
+  const savedPassword = (_a = store.get("config")) == null ? void 0 : _a.stopPassword;
+  if (!savedPassword) {
+    return { success: false, error: "Senha de parada não configurada para validação." };
+  }
+  if (password !== savedPassword) {
+    log.warn("Stop denied: invalid stop authentication password");
+    return { success: false, error: "Senha inválida." };
+  }
+  stopCollector();
+  return { success: true };
+});
 ipcMain$1.handle("window-minimize", (event) => {
   var _a;
   (_a = BrowserWindow.fromWebContents(event.sender)) == null ? void 0 : _a.minimize();
@@ -33698,6 +33948,7 @@ ipcMain$1.handle("test-sitrad-api", async (_e, config) => {
       sitradUrl: (config == null ? void 0 : config.sitradUrl) ?? (previous == null ? void 0 : previous.sitradUrl) ?? "",
       username: (config == null ? void 0 : config.username) ?? (previous == null ? void 0 : previous.username) ?? "",
       password: (config == null ? void 0 : config.password) ?? (previous == null ? void 0 : previous.password) ?? "",
+      stopPassword: (config == null ? void 0 : config.stopPassword) ?? (previous == null ? void 0 : previous.stopPassword) ?? "",
       setupToken: (config == null ? void 0 : config.setupToken) ?? (previous == null ? void 0 : previous.setupToken) ?? "",
       organizationId: (config == null ? void 0 : config.organizationId) ?? (previous == null ? void 0 : previous.organizationId) ?? "",
       token: (config == null ? void 0 : config.token) ?? (previous == null ? void 0 : previous.token) ?? ""
@@ -33730,6 +33981,10 @@ app$1.setLoginItemSettings({
   path: process.execPath
 });
 app$1.whenReady().then(async () => {
+  const appIconPath = process.env.NODE_ENV === "development" ? path$1.join(process.cwd(), "public", "LOGO.png") : path$1.join(process.resourcesPath, "public", "LOGO.png");
+  if (process.platform === "darwin") {
+    app$1.dock.setIcon(appIconPath);
+  }
   await hydrateAuthFromDeviceConfig();
   createTray();
   createWindow();
